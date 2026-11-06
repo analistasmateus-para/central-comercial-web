@@ -25,7 +25,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: central-comercial-web
+        working-directory: central-comercial-web/central-comercial-web
 
     steps:
       - name: Baixar arquivos
@@ -54,7 +54,7 @@ jobs:
       - name: Enviar arquivos compilados
         uses: actions/upload-pages-artifact@v3
         with:
-          path: central-comercial-web/dist
+          path: central-comercial-web/central-comercial-web/dist
 
       - name: Publicar GitHub Pages
         id: deployment
