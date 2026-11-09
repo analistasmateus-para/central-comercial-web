@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { auth, login, signOut, onAuthStateChanged } from './firebase';
 import { api } from './api';
@@ -39,6 +39,9 @@ function GroupTable({ groups, onOpen, label }) {
 }
 function App() {
   const [user, setUser] = useState(undefined);
+  const [accessRevoked, setAccessRevoked] = useState(false);
+  const [accessMessage, setAccessMessage] = useState('');
+  const authGeneration = useRef(0);
   const [adminMode,setAdminMode]=useState(new URLSearchParams(window.location.search).get('admin')==='1');
   const [me, setMe] = useState(null);
   const [module, setModule] = useState('vendedores');
@@ -59,11 +62,65 @@ function App() {
     let active = true;
     const unsubscribe = onAuthStateChanged(auth, u => {
       if (!active) return;
-      setUser(u); setMe(null); setRows([]); setOfficialRows([]); setMetadata(null); setError('');
-      if (u) api('/api/me').then(data => { if (active) setMe(data); }).catch(e => { if (active) setError(e.message); });
+      const generation = ++authGeneration.current;
+      setUser(u); setMe(null); setRows([]); setOfficialRows([]); setMetadata(null);
+      setSelected(''); setGroupDetail(null); setError(''); setAccessRevoked(false); setAccessMessage('');
+      if (u) api('/api/me').then(data => {
+        if (active && authGeneration.current === generation) setMe(data);
+      }).catch(e => {
+        if (active && authGeneration.current === generation) {
+          if (/API HTTP (401|403)\b/.test(e.message)) {
+            setAccessRevoked(true); setAccessMessage('Seu acesso não está autorizado ou foi desativado pelo administrador.');
+          } else setError(e.message);
+        }
+      });
     });
-    return () => { active = false; unsubscribe(); };
+    return () => { active = false; authGeneration.current++; unsubscribe(); };
   }, []);
+
+  // Revalida a autorização a cada minuto e ao retornar à aba.
+  // Falhas de rede não são interpretadas como bloqueio; apenas 401/403 da API.
+  useEffect(() => {
+    if (!user || !me || accessRevoked) return;
+    let active = true;
+    let checking = false;
+    const generation = authGeneration.current;
+    const checkAccess = async () => {
+      if (!active || checking || document.visibilityState === 'hidden') return;
+      checking = true;
+      try {
+        const data = await api('/api/me');
+        if (!active || authGeneration.current !== generation) return;
+        if (data?.ativo === false || data?.active === false) {
+          setAccessRevoked(true);
+          setAccessMessage('Seu acesso foi desativado pelo administrador.');
+          setMe(null); setRows([]); setOfficialRows([]); setMetadata(null);
+          setSelected(''); setGroupDetail(null);
+          return;
+        }
+        // Também atualiza permissões quando o administrador as modifica.
+        setMe(previous => JSON.stringify(previous) === JSON.stringify(data) ? previous : data);
+      } catch (e) {
+        if (!active || authGeneration.current !== generation) return;
+        if (/API HTTP (401|403)\b/.test(e.message)) {
+          setAccessRevoked(true);
+          setAccessMessage('Seu acesso foi desativado ou suas permissões foram revogadas.');
+          setMe(null); setRows([]); setOfficialRows([]); setMetadata(null);
+          setSelected(''); setGroupDetail(null);
+        }
+      } finally { checking = false; }
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') checkAccess(); };
+    const onFocus = () => checkAccess();
+    const timer = window.setInterval(checkAccess, 60_000);
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      active = false; window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [user, me, accessRevoked]);
   useEffect(() => {
     if (!me) return;
     const allowed = Array.isArray(me.modules) ? me.modules : [];
@@ -135,6 +192,7 @@ function App() {
   const group = groupDetail && (groupDetail.type === 'coordenacao' ? coordGroups : supervisorGroups).find(g => g.key === groupDetail.key);
   if (user === undefined) return <main className="page">Carregando…</main>;
   if (!user) return <main className="login"><h1>Central Comercial</h1><p>Acesso exclusivo para usuários autorizados.</p><button className="primary" onClick={() => login().catch(e => setError(e.message))}>Entrar com Google</button>{error && <p className="error">{error}</p>}</main>;
+  if (accessRevoked) return <main className="page"><h1>Acesso desativado</h1><p role="alert">{accessMessage}</p><button onClick={() => signOut(auth)}>Sair</button></main>;
   if (!me) return <main className="page"><h1>Central Comercial</h1><p>{error || 'Validando autorização…'}</p><button onClick={() => signOut(auth)}>Sair</button></main>;
   const allowed = Array.isArray(me.modules) ? me.modules : [];
   return <>
