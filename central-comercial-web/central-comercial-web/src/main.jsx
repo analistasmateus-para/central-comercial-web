@@ -21,10 +21,27 @@ function Metric({ title, value, sub }) { return <div className="metric"><span>{t
 function Progress({ value }) { const p = value == null ? 0 : Math.min(100, Math.max(0, value)); return <div className="progress" role="progressbar" aria-valuenow={p} aria-valuemin="0" aria-valuemax="100"><span style={{ width: `${p}%`, background: p >= 100 ? '#16845c' : p >= 70 ? '#1763a8' : '#d18a22' }} /></div>; }
 function Indicator({ item, name, kind }) { const p = rate(item); return <div className="indicator"><div className="indicator-heading"><strong>{name}</strong><b>{percent(p)}</b></div><Progress value={p}/><div className="indicator-values"><span>Meta <b>{displayValue(num(item?.meta), kind)}</b></span><span>Realizado <b>{displayValue(num(item?.realizado), kind)}</b></span>{num(item?.tendencia) !== null && <span>Tendência <b>{displayValue(num(item?.tendencia), kind)}</b></span>}</div></div>; }
 
+function aggregate(data) {
+  return Object.fromEntries(TYPES.map(([key]) => {
+    const items = data.map(r => r.indicadores?.[key]).filter(Boolean);
+    if (!items.length) return [key, null];
+    const meta = items.reduce((sum, x) => sum + (num(x.meta) ?? 0), 0);
+    const realizado = items.reduce((sum, x) => sum + (num(x.realizado) ?? 0), 0);
+    const tendencias = items.map(x => num(x.tendencia)).filter(v => v !== null);
+    return [key, { meta, realizado, tendencia: tendencias.length ? tendencias.reduce((a,b) => a+b,0) : null }];
+  }));
+}
+function GroupTable({ groups, onOpen, label }) {
+  return <div className="scroll"><table><thead><tr><th>{label}</th><th>Vendedores</th><th>Volume</th><th>Positivação</th><th>Mix</th><th>Ação</th></tr></thead><tbody>
+    {groups.map(g => <tr key={g.key}><td><strong>{g.name}</strong><small>{g.subtitle}</small></td><td>{g.count}</td>{TYPES.map(([key]) => <td key={key}><span className="pct">{percent(rate(g.indicadores[key]))}</span><Progress value={rate(g.indicadores[key])}/></td>)}<td><button className="detail-btn" onClick={() => onOpen(g)}>Ver detalhes</button></td></tr>)}
+  </tbody></table>{!groups.length && <p className="empty">Nenhum registro encontrado.</p>}</div>;
+}
 function App() {
   const [user, setUser] = useState(undefined);
   const [me, setMe] = useState(null);
   const [module, setModule] = useState('vendedores');
+  const [view, setView] = useState('coordenacao');
+  const [groupDetail, setGroupDetail] = useState(null);
   const [coord, setCoord] = useState('');
   const [sup, setSup] = useState('');
   const [seller, setSeller] = useState('');
@@ -52,7 +69,7 @@ function App() {
   useEffect(() => {
     if (!me || !(me.modules || []).includes(module)) return;
     let active = true;
-    setLoading(true); setError(''); setRows([]); setMetadata(null); setSelected('');
+    setLoading(true); setError(''); setRows([]); setMetadata(null); setSelected(''); setGroupDetail(null);
     const query = coord ? '?coordenacao=' + encodeURIComponent(coord) : '';
     api('/api/reports/' + module + query)
       .then(data => { if (!active) return; setRows(Array.isArray(data.rows) ? data.rows : []); setMetadata(data); })
@@ -79,6 +96,18 @@ function App() {
     return { key,name,kind,meta,realizado,tendencia,hasData:values.length > 0 };
   }), [visible]);
 
+  const coordGroups = useMemo(() => {
+    const map = new Map();
+    visible.forEach(r => { const k = String(r.codigo_coordenacao); if (!map.has(k)) map.set(k, []); map.get(k).push(r); });
+    return [...map].map(([key, data]) => ({ key, name: data[0].coordenacao, subtitle: `Código ${key}`, count: unique(data, keyOf), rows: data, indicadores: aggregate(data), type: 'coordenacao' })).sort((a,b) => a.name.localeCompare(b.name,'pt-BR'));
+  }, [visible]);
+  const supervisorGroups = useMemo(() => {
+    const map = new Map();
+    visible.forEach(r => { const k = `${r.codigo_coordenacao}|${r.codigo_supervisao}`; if (!map.has(k)) map.set(k, []); map.get(k).push(r); });
+    return [...map].map(([key, data]) => ({ key, name: data[0].supervisao, subtitle: `${data[0].coordenacao} · Código ${data[0].codigo_supervisao}`, count: unique(data, keyOf), rows: data, indicadores: aggregate(data), type: 'supervisao' })).sort((a,b) => a.name.localeCompare(b.name,'pt-BR'));
+  }, [visible]);
+  const openGroup = g => setGroupDetail(g);
+  const group = groupDetail && (groupDetail.type === 'coordenacao' ? coordGroups : supervisorGroups).find(g => g.key === groupDetail.key);
   if (user === undefined) return <main className="page">Carregando…</main>;
   if (!user) return <main className="login"><h1>Central Comercial</h1><p>Acesso exclusivo para usuários autorizados.</p><button className="primary" onClick={() => login().catch(e => setError(e.message))}>Entrar com Google</button>{error && <p className="error">{error}</p>}</main>;
   if (!me) return <main className="page"><h1>Central Comercial</h1><p>{error || 'Validando autorização…'}</p><button onClick={() => signOut(auth)}>Sair</button></main>;
@@ -101,8 +130,15 @@ function App() {
         {module === 'vendedores' && <>
           <div className="section-title"><h2>Indicadores consolidados</h2><span className="muted">Soma das metas e realizados dos vendedores filtrados</span></div>
           <div className="summary-grid">{totals.map(t => <div className="summary-card" key={t.key}><div className="summary-top"><strong>{t.name}</strong><b>{t.hasData && t.meta > 0 ? percent(t.realizado / t.meta * 100) : '—'}</b></div><Progress value={t.hasData && t.meta > 0 ? t.realizado / t.meta * 100 : null}/><div className="summary-values"><span>Meta <strong>{t.hasData ? displayValue(t.meta,t.kind) : '—'}</strong></span><span>Realizado <strong>{t.hasData ? displayValue(t.realizado,t.kind) : '—'}</strong></span>{t.tendencia !== null && <span>Tendência <strong>{displayValue(t.tendencia,t.kind)}</strong></span>}</div></div>)}</div>
-          <div className="section-title"><h2>Vendedores</h2><span className="muted">Selecione um vendedor para ver todos os indicadores</span></div>
-          <div className="scroll"><table><thead><tr><th>Vendedor</th><th>Coordenação</th><th>Supervisão</th><th>Volume</th><th>Positivação</th><th>Mix</th><th>Detalhes</th></tr></thead><tbody>{ordered.map(r => <tr key={keyOf(r)}><td><strong>{r.vendedor}</strong><small>RCA {r.codigo_vendedor}</small></td><td>{r.coordenacao}</td><td>{r.supervisao}<small>{r.codigo_supervisao}</small></td>{TYPES.map(([key]) => <td key={key}><span className="pct">{percent(rate(r.indicadores?.[key]))}</span><Progress value={rate(r.indicadores?.[key])}/></td>)}<td><button className="detail-btn" onClick={() => setSelected(keyOf(r))}>Ver</button></td></tr>)}</tbody></table>{!loading && !ordered.length && <p className="empty">Nenhum vendedor encontrado.</p>}</div>
+          <div className="section-title"><h2>Visões de desempenho</h2><span className="muted">Selecione o nível de acompanhamento</span></div>
+          <div className="view-tabs" role="group" aria-label="Visão do relatório">
+            {[['coordenacao','Coordenadores'],['supervisao','Supervisores'],['vendedor','Vendedores']].map(([id,label]) => <button key={id} className={view === id ? 'active' : ''} aria-pressed={view === id} onClick={() => {setView(id);setGroupDetail(null);setSelected('');}}>{label}</button>)}
+          </div>
+          {view === 'coordenacao' && <><div className="section-title"><h2>Resultados por coordenação</h2><span className="muted">Consolidado dos vendedores de cada coordenação</span></div><GroupTable groups={coordGroups} onOpen={openGroup} label="Coordenação"/></>}
+          {view === 'supervisao' && <><div className="section-title"><h2>Resultados por supervisão</h2><span className="muted">Consolidado por equipe</span></div><GroupTable groups={supervisorGroups} onOpen={openGroup} label="Supervisão"/></>}
+          {view === 'vendedor' && <><div className="section-title"><h2>Vendedores</h2><span className="muted">Selecione um vendedor para ver todos os indicadores</span></div>
+          <div className="scroll"><table><thead><tr><th>Vendedor</th><th>Coordenação</th><th>Supervisão</th><th>Volume</th><th>Positivação</th><th>Mix</th><th>Detalhes</th></tr></thead><tbody>{ordered.map(r => <tr key={keyOf(r)}><td><strong>{r.vendedor}</strong><small>RCA {r.codigo_vendedor}</small></td><td>{r.coordenacao}</td><td>{r.supervisao}<small>{r.codigo_supervisao}</small></td>{TYPES.map(([key]) => <td key={key}><span className="pct">{percent(rate(r.indicadores?.[key]))}</span><Progress value={rate(r.indicadores?.[key])}/></td>)}<td><button className="detail-btn" onClick={() => setSelected(keyOf(r))}>Ver</button></td></tr>)}</tbody></table>{!loading && !ordered.length && <p className="empty">Nenhum vendedor encontrado.</p>}</div></>}
+          {group && <div className="detail-backdrop" onClick={() => setGroupDetail(null)}><div className="detail-panel" role="dialog" aria-modal="true" aria-label="Detalhamento do grupo" onClick={e => e.stopPropagation()}><div className="detail-header"><div><p className="eyebrow">VISÃO {group.type === 'coordenacao' ? 'DA COORDENAÇÃO' : 'DA SUPERVISÃO'}</p><h2>{group.name}</h2><p className="muted">{group.subtitle} · {group.count} vendedores</p></div><button aria-label="Fechar detalhes" onClick={() => setGroupDetail(null)}>✕</button></div><div className="detail-indicators">{TYPES.map(([key,name,kind]) => <Indicator key={key} name={name} kind={kind} item={group.indicadores[key]}/>)}</div><h3>Equipe</h3><div className="group-members">{[...group.rows].sort((a,b) => String(a.vendedor).localeCompare(String(b.vendedor),'pt-BR')).map(r => <button key={keyOf(r)} onClick={() => {setGroupDetail(null);setSelected(keyOf(r));}}><span>{r.vendedor}</span><small>RCA {r.codigo_vendedor} · {r.supervisao}</small></button>)}</div><button className="primary close-btn" onClick={() => setGroupDetail(null)}>Fechar</button></div></div>}
           {detail && <div className="detail-backdrop" onClick={() => setSelected('')}><div className="detail-panel" role="dialog" aria-modal="true" aria-label="Indicadores do vendedor" onClick={e => e.stopPropagation()}><div className="detail-header"><div><p className="eyebrow">DETALHAMENTO DO RCA</p><h2>{detail.vendedor}</h2><p className="muted">Código {detail.codigo_vendedor} · {detail.supervisao} · {detail.coordenacao}</p><p className="muted">Competência: {month(detail.competencia)}</p></div><button onClick={() => setSelected('')} aria-label="Fechar detalhes">✕</button></div><div className="detail-indicators">{TYPES.map(([key,name,kind]) => <Indicator key={key} name={name} kind={kind} item={detail.indicadores?.[key]}/>)}</div><button className="primary close-btn" onClick={() => setSelected('')}>Fechar</button></div></div>}
         </>}
         <p className="hint">Dados consultados pela API conforme as permissões do usuário. Os percentuais visuais são limitados a 100%; metas e valores realizados permanecem integrais. Exportação PDF ainda não implementada.</p>
