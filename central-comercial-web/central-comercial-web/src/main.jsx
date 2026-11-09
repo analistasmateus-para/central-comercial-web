@@ -1,257 +1,40 @@
-
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import {
-  auth,
-  login,
-  signOut,
-  onAuthStateChanged
-} from './firebase';
+import { auth, login, signOut, onAuthStateChanged } from './firebase';
 import { api } from './api';
 import './style.css';
 
-const names = {
-  vendedores: 'Situação de Vendedores',
-  crm: 'CRM de Clientes',
-  propostas: 'Análise de Propostas',
-  gerais: 'Relatórios Gerais'
-};
-
-function App() {
-  const [user, setUser] = useState(undefined);
-  const [me, setMe] = useState(null);
-  const [module, setModule] = useState('vendedores');
-  const [coord, setCoord] = useState('');
-  const [rows, setRows] = useState([]);
-  const [error, setError] = useState('');
-
-  // Autenticação e consulta das permissões
-  useEffect(() => {
-    return onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setMe(null);
-      setRows([]);
-      setCoord('');
-      setError('');
-
-      if (u) {
-        api('/api/me')
-          .then(setMe)
-          .catch((e) => setError(e.message));
-      }
-    });
-  }, []);
-
-  // Selecionar automaticamente um módulo autorizado
-  useEffect(() => {
-    if (!me) return;
-
-    const modules = Array.isArray(me.modules)
-      ? me.modules
-      : [];
-
-    if (!modules.includes(module) && modules.length > 0) {
-      setModule(modules[0]);
-    }
-  }, [me, module]);
-
-  // Consultar os relatórios
-  useEffect(() => {
-    if (!me) return;
-
-    const modules = Array.isArray(me.modules)
-      ? me.modules
-      : [];
-
-    if (!modules.includes(module)) return;
-
-    let cancelled = false;
-
-    setRows([]);
-    setError('');
-
-    const query = coord
-      ? '?coordenacao=' + encodeURIComponent(coord)
-      : '';
-
-    api('/api/reports/' + module + query)
-      .then((data) => {
-        if (!cancelled) {
-          setRows(Array.isArray(data.rows) ? data.rows : []);
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setRows([]);
-          setError(e.message);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [me, module, coord]);
-
-  // Tela de carregamento
-  if (user === undefined) {
-    return <main>Carregando…</main>;
-  }
-
-  // Tela de login
-  if (!user) {
-    return (
-      <main className="login">
-        <h1>Central Comercial</h1>
-
-        <p>Acesso exclusivo para usuários autorizados.</p>
-
-        <button
-          onClick={() =>
-            login().catch((e) => setError(e.message))
-          }
-        >
-          Entrar com Google
-        </button>
-
-        {error && <p className="error">{error}</p>}
-      </main>
-    );
-  }
-
-  // Validação do acesso pela API
-  if (!me) {
-    return (
-      <main>
-        <h1>Central Comercial</h1>
-
-        <p>{error || 'Validando autorização…'}</p>
-
-        <p className="hint">
-          Diagnóstico: autenticação Google concluída;
-          aguardando resposta de /api/me.
-          O token não é exibido.
-        </p>
-
-        <button onClick={() => signOut(auth)}>
-          Sair
-        </button>
-      </main>
-    );
-  }
-
-  const authorizedModules = Array.isArray(me.modules)
-    ? me.modules
-    : [];
-
-  const coordenacoes = Array.isArray(me.coordenacoes)
-    ? me.coordenacoes
-    : [];
-
-  return (
-    <>
-      <header>
-        <strong>Central Comercial</strong>
-
-        <span>
-          {user.email}{' '}
-          <button onClick={() => signOut(auth)}>
-            Sair
-          </button>
-        </span>
-      </header>
-
-      <main>
-        <nav>
-          {Object.entries(names)
-            .filter(([key]) => authorizedModules.includes(key))
-            .map(([key, name]) => (
-              <button
-                key={key}
-                className={module === key ? 'active' : ''}
-                onClick={() => {
-                  setModule(key);
-                  setCoord('');
-                }}
-              >
-                {name}
-              </button>
-            ))}
-        </nav>
-
-        <section>
-          <h1>{names[module] || 'Central Comercial'}</h1>
-
-          <label>
-            Coordenação{' '}
-
-            <select
-              value={coord}
-              onChange={(e) => setCoord(e.target.value)}
-            >
-              <option value="">
-                Todas autorizadas
-              </option>
-
-              {coordenacoes.map((c) => (
-                <option
-                  key={c.id}
-                  value={c.codigo}
-                >
-                  {c.nome}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {error && (
-            <p className="error">{error}</p>
-          )}
-
-          <p>{rows.length} registros</p>
-
-          <div className="scroll">
-            <table>
-              <thead>
-                <tr>
-                  {rows.length > 0 &&
-                    Object.keys(rows[0]).map((key) => (
-                      <th key={key}>
-                        {key}
-                      </th>
-                    ))}
-                </tr>
-              </thead>
-
-              <tbody>
-                {rows.map((row, index) => (
-                  <tr key={index}>
-                    {Object.values(row).map((value, j) => (
-                      <td key={j}>
-                        {value == null
-                          ? '—'
-                          : typeof value === 'object'
-                            ? JSON.stringify(value)
-                            : String(value)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <p className="hint">
-            Os demais módulos serão ativados após
-            a definição de suas bases.
-            Exportação PDF será implementada no backend,
-            com validação de permissões.
-          </p>
-        </section>
-      </main>
-    </>
-  );
+const names = { vendedores: 'Situação de Vendedores', crm: 'CRM de Clientes', propostas: 'Análise de Propostas', gerais: 'Relatórios Gerais' };
+const get = (r, ...keys) => { for (const k of keys) if (r?.[k] !== undefined && r[k] !== null) return r[k]; return ''; };
+const str = v => v == null ? '' : String(v);
+const number = v => { if (typeof v === 'number') return Number.isFinite(v) ? v : null; if (typeof v !== 'string') return null; const s = v.trim().replace(/\s/g,''); if (!s) return null; const normalized = s.includes(',') ? s.replace(/\./g,'').replace(',','.') : s; const n = Number(normalized); return Number.isFinite(n) ? n : null; };
+const fmt = n => n == null ? '—' : new Intl.NumberFormat('pt-BR',{maximumFractionDigits:2}).format(n);
+const dateLabel = v => { if (!v) return 'Não informada pela API'; const d = new Date(v); return Number.isNaN(d.getTime()) ? str(v) : new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'short',timeZone:'America/Sao_Paulo'}).format(d); };
+const labels = { coordenacao:'Coordenação', codigo_coordenacao:'Código coordenação', supervisao:'Supervisão', codigo_supervisao:'Cód. supervisão', vendedor:'Vendedor', codigo_vendedor:'Cód. vendedor', codigo_v:'Cód. vendedor', competencia:'Competência', indicador:'Indicador', meta:'Meta', realizado:'Realizado', tendencia:'Tendência', percentual:'Atingimento', percentual_atingimento:'Atingimento' };
+function App(){
+ const [user,setUser]=useState(undefined),[me,setMe]=useState(null),[module,setModule]=useState('vendedores');
+ const [coord,setCoord]=useState(''),[sup,setSup]=useState(''),[seller,setSeller]=useState(''),[search,setSearch]=useState('');
+ const [rows,setRows]=useState([]),[metadata,setMetadata]=useState(null),[error,setError]=useState(''),[loading,setLoading]=useState(false);
+ useEffect(()=>{ let active=true; const unsubscribe=onAuthStateChanged(auth,u=>{if(!active)return;setUser(u);setMe(null);setRows([]);setError('');if(u)api('/api/me').then(data=>{if(active)setMe(data)}).catch(e=>{if(active)setError(e.message)})});return()=>{active=false;unsubscribe()} },[]);
+ useEffect(()=>{if(!me)return;const allowed=Array.isArray(me.modules)?me.modules:[];if(!allowed.includes(module)&&allowed.length)setModule(allowed[0])},[me,module]);
+ useEffect(()=>{if(!me||!(me.modules||[]).includes(module))return;let active=true;setLoading(true);setError('');setRows([]);setMetadata(null);const query=coord?'?coordenacao='+encodeURIComponent(coord):'';api('/api/reports/'+module+query).then(data=>{if(!active)return;setRows(Array.isArray(data.rows)?data.rows:[]);setMetadata(data)}).catch(e=>{if(active){setError(e.message);setRows([])}}).finally(()=>{if(active)setLoading(false)});return()=>{active=false}},[me,module,coord]);
+ const coords=Array.isArray(me?.coordenacoes)?me.coordenacoes:[];
+ const supOptions=useMemo(()=>[...new Map(rows.map(r=>[str(get(r,'codigo_supervisao','supervisao_id','supervisao')), {code:str(get(r,'codigo_supervisao','supervisao_id','supervisao')),name:str(get(r,'supervisao','nome_supervisao'))}])).values()].filter(x=>x.code).sort((a,b)=>a.name.localeCompare(b.name,'pt-BR')),[rows]);
+ const supRows=useMemo(()=>sup?rows.filter(r=>str(get(r,'codigo_supervisao','supervisao_id','supervisao'))===sup):rows,[rows,sup]);
+ const sellers=useMemo(()=>[...new Map(supRows.map(r=>[str(get(r,'codigo_vendedor','codigo_v','vendedor_id','vendedor')), {code:str(get(r,'codigo_vendedor','codigo_v','vendedor_id','vendedor')),name:str(get(r,'vendedor','nome_vendedor'))}])).values()].filter(x=>x.code).sort((a,b)=>a.name.localeCompare(b.name,'pt-BR')),[supRows]);
+ const visible=useMemo(()=>supRows.filter(r=>(!seller||str(get(r,'codigo_vendedor','codigo_v','vendedor_id','vendedor'))===seller)&&(!search||Object.values(r).some(v=>str(v).toLocaleLowerCase('pt-BR').includes(search.toLocaleLowerCase('pt-BR'))))),[supRows,seller,search]);
+ const uniqueCount=(list,keys)=>new Set(list.map(r=>str(get(r,...keys))).filter(Boolean)).size;
+ const updates=useMemo(()=>{if(!metadata)return[];const candidates=[metadata.atualizacoes,metadata.ultima_atualizacao_por_coordenacao,metadata.updates,metadata.coordenacoes_atualizacoes];let raw=candidates.find(x=>x&&typeof x==='object');if(Array.isArray(raw))return raw.map(x=>({code:str(get(x,'codigo','codigo_coordenacao','coordenacao')),name:str(get(x,'nome','coordenacao')),date:get(x,'ultima_atualizacao','atualizado_em','finalizado_em')}));if(raw&&!Array.isArray(raw))return Object.entries(raw).map(([code,v])=>({code,name:coords.find(c=>c.codigo===code)?.nome||code,date:typeof v==='object'?get(v,'ultima_atualizacao','atualizado_em','finalizado_em'):v}));const single=get(metadata,'ultima_atualizacao','atualizado_em');return single?[{code:coord,name:coords.find(c=>c.codigo===coord)?.nome||'Coordenação selecionada',date:single}]:[]},[metadata,coords,coord]);
+ const fields=useMemo(()=>visible.length?Object.keys(visible[0]):rows.length?Object.keys(rows[0]):[],[visible,rows]);
+ if(user===undefined)return <main className="page"><p>Carregando…</p></main>;
+ if(!user)return <main className="login"><h1>Central Comercial</h1><p>Acesso exclusivo para usuários autorizados.</p><button className="primary" onClick={()=>login().catch(e=>setError(e.message))}>Entrar com Google</button>{error&&<p className="error">{error}</p>}</main>;
+ if(!me)return <main className="page"><h1>Central Comercial</h1><p>{error||'Validando autorização…'}</p><button onClick={()=>signOut(auth)}>Sair</button></main>;
+ const authorized=Array.isArray(me.modules)?me.modules:[];
+ return <><header className="topbar"><strong>Central Comercial</strong><div className="account"><span>{user.email}</span><button onClick={()=>signOut(auth)}>Sair</button></div></header><main className="page"><nav>{Object.entries(names).filter(([k])=>authorized.includes(k)).map(([k,v])=><button key={k} className={module===k?'active':''} onClick={()=>{setModule(k);setCoord('');setSup('');setSeller('');setSearch('')}}>{v}</button>)}</nav><section className="panel"><div className="panel-heading"><div><p className="eyebrow">PAINEL COMERCIAL</p><h1>{names[module]||'Central Comercial'}</h1><p className="muted">Consulte o desempenho por coordenação, supervisão e vendedor.</p></div><span className="count-tag">{loading?'Atualizando…':`${visible.length} registros exibidos`}</span></div>
+ <div className="filters"><label>Coordenação<select value={coord} onChange={e=>{setCoord(e.target.value);setSup('');setSeller('');setSearch('')}}><option value="">Todas autorizadas</option>{coords.map(c=><option key={c.id} value={c.codigo}>{c.nome}</option>)}</select></label><label>Supervisão<select value={sup} onChange={e=>{setSup(e.target.value);setSeller('')}}><option value="">Todas</option>{supOptions.map(x=><option key={x.code} value={x.code}>{x.name||x.code} ({x.code})</option>)}</select></label><label>Vendedor<select value={seller} onChange={e=>setSeller(e.target.value)}><option value="">Todos</option>{sellers.map(x=><option key={x.code} value={x.code}>{x.name||x.code} ({x.code})</option>)}</select></label><label>Pesquisar<input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nome ou código"/></label></div>
+ {error&&<p className="error" role="alert">{error}</p>}
+ <div className="kpis"><div className="kpi"><span>Registros na consulta</span><strong>{fmt(rows.length)}</strong></div><div className="kpi"><span>Supervisões no filtro</span><strong>{fmt(uniqueCount(visible,['codigo_supervisao','supervisao_id','supervisao']))}</strong></div><div className="kpi"><span>Vendedores distintos no filtro</span><strong>{fmt(uniqueCount(visible,['codigo_vendedor','codigo_v','vendedor_id','vendedor']))}</strong></div><div className="kpi"><span>Coordenações no filtro</span><strong>{fmt(uniqueCount(visible,['codigo_coordenacao','coordenacao']))}</strong></div></div>
+ <div className="updates"><strong>Última atualização dos dados</strong>{updates.length? <div className="update-items">{updates.map((u,i)=><span key={u.code||i}><b>{u.name||u.code}:</b> {dateLabel(u.date)}</span>)}</div>:<p className="muted">A API ainda não forneceu a data de atualização neste formato. A informação será exibida assim que o campo estiver disponível na resposta.</p>}</div>
+ <div className="table-title"><h2>Detalhamento</h2><span className="muted">{loading?'Consultando API…':`${visible.length} linhas`}</span></div><div className="scroll"><table><thead><tr>{fields.map(k=><th key={k}>{labels[k]||k.replace(/_/g,' ')}</th>)}</tr></thead><tbody>{visible.map((r,i)=><tr key={i}>{fields.map(k=>{const v=r[k];return <td key={k}>{v==null?'—':typeof v==='object'?JSON.stringify(v):str(v)}</td>})}</tr>)}</tbody></table>{!loading&&!visible.length&&<p className="empty">Nenhum registro encontrado para os filtros selecionados.</p>}</div><p className="hint">Os dados são consultados pela API com as permissões do usuário. A exportação PDF será disponibilizada após a implementação segura no backend.</p></section></main></>;
 }
-
-createRoot(
-  document.getElementById('root')
-).render(<App />);
+createRoot(document.getElementById('root')).render(<App/>);
