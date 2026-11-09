@@ -9,7 +9,7 @@ const TYPES = [ ['volume', 'Volume', 'R$'], ['positivacao', 'Positivação', 'cl
 const num = v => v == null || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null;
 const formatNumber = (v, digits = 0) => v == null ? '—' : new Intl.NumberFormat('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(v);
 const money = v => v == null ? '—' : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
-const percent = v => v == null ? '—' : `${formatNumber(Math.min(100, Math.max(0, v)), 1)}%`;
+const percent = v => v == null || !Number.isFinite(v) ? '—' : `${formatNumber(Math.min(100, Math.max(0, v)), 1)}%`;
 const rate = item => { const p = num(item?.percentual); if (p !== null) return Math.min(100, Math.max(0, p)); const meta = num(item?.meta); const realizado = num(item?.realizado); return meta > 0 && realizado !== null ? Math.min(100, Math.max(0, realizado / meta * 100)) : null; };
 const dateTime = value => { if (!value) return 'Não informada'; const d = new Date(value); return Number.isNaN(d.getTime()) ? 'Data inválida' : new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Belem', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(d); };
 const month = value => { if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return 'Não informada'; const [y, m] = value.split('-').map(Number); return new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(y, m - 1, 1))); };
@@ -47,6 +47,7 @@ function App() {
   const [seller, setSeller] = useState('');
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState([]);
+  const [officialRows, setOfficialRows] = useState([]);
   const [metadata, setMetadata] = useState(null);
   const [selected, setSelected] = useState('');
   const [error, setError] = useState('');
@@ -56,7 +57,7 @@ function App() {
     let active = true;
     const unsubscribe = onAuthStateChanged(auth, u => {
       if (!active) return;
-      setUser(u); setMe(null); setRows([]); setMetadata(null); setError('');
+      setUser(u); setMe(null); setRows([]); setOfficialRows([]); setMetadata(null); setError('');
       if (u) api('/api/me').then(data => { if (active) setMe(data); }).catch(e => { if (active) setError(e.message); });
     });
     return () => { active = false; unsubscribe(); };
@@ -69,10 +70,13 @@ function App() {
   useEffect(() => {
     if (!me || !(me.modules || []).includes(module)) return;
     let active = true;
-    setLoading(true); setError(''); setRows([]); setMetadata(null); setSelected(''); setGroupDetail(null);
+    setLoading(true); setError(''); setRows([]); setOfficialRows([]); setMetadata(null); setSelected(''); setGroupDetail(null);
     const query = coord ? '?coordenacao=' + encodeURIComponent(coord) : '';
-    api('/api/reports/' + module + query)
-      .then(data => { if (!active) return; setRows(Array.isArray(data.rows) ? data.rows : []); setMetadata(data); })
+    Promise.all([
+      api('/api/reports/' + module + query),
+      module === 'vendedores' ? api('/api/reports/supervisoes' + query) : Promise.resolve({ rows: [] })
+    ])
+      .then(([data, official]) => { if (!active) return; setRows(Array.isArray(data.rows) ? data.rows : []); setOfficialRows(Array.isArray(official.rows) ? official.rows : []); setMetadata(data); })
       .catch(e => { if (active) { setError(e.message); setRows([]); } })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -96,16 +100,35 @@ function App() {
     return { key,name,kind,meta,realizado,tendencia,hasData:values.length > 0 };
   }), [visible]);
 
+  // As duas visões superiores usam SOMENTE os indicadores oficiais de supervisão.
+  // Filtros de vendedor/pesquisa não alteram os totais oficiais.
+  const officialVisible = useMemo(() => officialRows.filter(r =>
+    (!coord || r.codigo_coordenacao === coord) &&
+    (!sup || `${r.codigo_coordenacao}|${r.codigo_supervisao}` === sup)
+  ), [officialRows, coord, sup]);
   const coordGroups = useMemo(() => {
     const map = new Map();
-    visible.forEach(r => { const k = String(r.codigo_coordenacao); if (!map.has(k)) map.set(k, []); map.get(k).push(r); });
-    return [...map].map(([key, data]) => ({ key, name: data[0].coordenacao, subtitle: `Código ${key}`, count: unique(data, keyOf), rows: data, indicadores: aggregate(data), type: 'coordenacao' })).sort((a,b) => a.name.localeCompare(b.name,'pt-BR'));
-  }, [visible]);
-  const supervisorGroups = useMemo(() => {
-    const map = new Map();
-    visible.forEach(r => { const k = `${r.codigo_coordenacao}|${r.codigo_supervisao}`; if (!map.has(k)) map.set(k, []); map.get(k).push(r); });
-    return [...map].map(([key, data]) => ({ key, name: data[0].supervisao, subtitle: `${data[0].coordenacao} · Código ${data[0].codigo_supervisao}`, count: unique(data, keyOf), rows: data, indicadores: aggregate(data), type: 'supervisao' })).sort((a,b) => a.name.localeCompare(b.name,'pt-BR'));
-  }, [visible]);
+    officialVisible.forEach(r => {
+      const k = String(r.codigo_coordenacao);
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(r);
+    });
+    return [...map].map(([key, data]) => ({
+      key, name: data[0].coordenacao, subtitle: `Código ${key}`,
+      count: unique(rows.filter(r => r.codigo_coordenacao === key && (!sup || `${r.codigo_coordenacao}|${r.codigo_supervisao}` === sup)), keyOf),
+      rows: rows.filter(r => r.codigo_coordenacao === key && (!sup || `${r.codigo_coordenacao}|${r.codigo_supervisao}` === sup)),
+      indicadores: aggregate(data), type: 'coordenacao'
+    })).sort((a,b) => a.name.localeCompare(b.name,'pt-BR'));
+  }, [officialVisible, rows, sup]);
+  const supervisorGroups = useMemo(() => officialVisible.map(r => ({
+    key: `${r.codigo_coordenacao}|${r.codigo_supervisao}`,
+    name: r.supervisao,
+    subtitle: `${r.coordenacao} · Código ${r.codigo_supervisao}`,
+    count: unique(rows.filter(v => v.codigo_coordenacao === r.codigo_coordenacao && String(v.codigo_supervisao) === String(r.codigo_supervisao)), keyOf),
+    rows: rows.filter(v => v.codigo_coordenacao === r.codigo_coordenacao && String(v.codigo_supervisao) === String(r.codigo_supervisao)),
+    indicadores: r.indicadores || {}, type: 'supervisao'
+  })).sort((a,b) => a.name.localeCompare(b.name,'pt-BR')), [officialVisible, rows]);
+  const officialTotals = useMemo(() => aggregate(officialVisible), [officialVisible]);
   const openGroup = g => setGroupDetail(g);
   const group = groupDetail && (groupDetail.type === 'coordenacao' ? coordGroups : supervisorGroups).find(g => g.key === groupDetail.key);
   if (user === undefined) return <main className="page">Carregando…</main>;
@@ -128,14 +151,14 @@ function App() {
         <div className="kpis"><Metric title="Vendedores no filtro" value={formatNumber(unique(visible,keyOf))}/><Metric title="Supervisões" value={formatNumber(unique(visible,r => `${r.codigo_coordenacao}|${r.codigo_supervisao}`))}/><Metric title="Coordenações" value={formatNumber(unique(visible,r => r.codigo_coordenacao))}/><Metric title="Registros na consulta" value={formatNumber(rows.length)} sub="Antes dos filtros locais"/></div>
         <div className="updates"><h2>Atualização por coordenação</h2><div className="update-grid">{activeCoords.map(c => <div className="update-item" key={c.codigo}><strong>{c.nome}</strong><span>Atualizado: {dateTime(updates[c.codigo])}</span><span>Competência: {month(competencies[c.codigo])}</span></div>)}</div></div>
         {module === 'vendedores' && <>
-          <div className="section-title"><h2>Indicadores consolidados</h2><span className="muted">Soma das metas e realizados dos vendedores filtrados</span></div>
-          <div className="summary-grid">{totals.map(t => <div className="summary-card" key={t.key}><div className="summary-top"><strong>{t.name}</strong><b>{t.hasData && t.meta > 0 ? percent(t.realizado / t.meta * 100) : '—'}</b></div><Progress value={t.hasData && t.meta > 0 ? t.realizado / t.meta * 100 : null}/><div className="summary-values"><span>Meta <strong>{t.hasData ? displayValue(t.meta,t.kind) : '—'}</strong></span><span>Realizado <strong>{t.hasData ? displayValue(t.realizado,t.kind) : '—'}</strong></span>{t.tendencia !== null && <span>Tendência <strong>{displayValue(t.tendencia,t.kind)}</strong></span>}</div></div>)}</div>
+          <div className="section-title"><h2>Indicadores consolidados</h2><span className="muted">{view === 'vendedor' ? 'Soma dos RCAs filtrados' : 'Indicadores oficiais das supervisões (não calculados pelos RCAs)'}</span></div>
+          <div className="summary-grid">{totals.map(t => { const official = officialTotals[t.key]; const value = view === 'vendedor' ? t : { ...t, meta: num(official?.meta), realizado: num(official?.realizado), tendencia: num(official?.tendencia), hasData: !!official }; return <div className="summary-card" key={t.key}><div className="summary-top"><strong>{t.name}</strong><b>{value.hasData && value.meta > 0 ? percent(value.realizado / value.meta * 100) : '—'}</b></div><Progress value={value.hasData && value.meta > 0 ? value.realizado / value.meta * 100 : null}/><div className="summary-values"><span>Meta <strong>{value.hasData ? displayValue(value.meta,t.kind) : '—'}</strong></span><span>Realizado <strong>{value.hasData ? displayValue(value.realizado,t.kind) : '—'}</strong></span>{value.tendencia !== null && <span>Tendência <strong>{displayValue(value.tendencia,t.kind)}</strong></span>}</div></div>; })}</div>
           <div className="section-title"><h2>Visões de desempenho</h2><span className="muted">Selecione o nível de acompanhamento</span></div>
           <div className="view-tabs" role="group" aria-label="Visão do relatório">
             {[['coordenacao','Coordenadores'],['supervisao','Supervisores'],['vendedor','Vendedores']].map(([id,label]) => <button key={id} className={view === id ? 'active' : ''} aria-pressed={view === id} onClick={() => {setView(id);setGroupDetail(null);setSelected('');}}>{label}</button>)}
           </div>
-          {view === 'coordenacao' && <><div className="section-title"><h2>Resultados por coordenação</h2><span className="muted">Consolidado dos vendedores de cada coordenação</span></div><GroupTable groups={coordGroups} onOpen={openGroup} label="Coordenação"/></>}
-          {view === 'supervisao' && <><div className="section-title"><h2>Resultados por supervisão</h2><span className="muted">Consolidado por equipe</span></div><GroupTable groups={supervisorGroups} onOpen={openGroup} label="Supervisão"/></>}
+          {view === 'coordenacao' && <><div className="section-title"><h2>Resultados por coordenação</h2><span className="muted">Soma dos indicadores oficiais das supervisões</span></div><GroupTable groups={coordGroups} onOpen={openGroup} label="Coordenação"/></>}
+          {view === 'supervisao' && <><div className="section-title"><h2>Resultados por supervisão</h2><span className="muted">Valores oficiais da planilha de supervisões</span></div><GroupTable groups={supervisorGroups} onOpen={openGroup} label="Supervisão"/></>}
           {view === 'vendedor' && <><div className="section-title"><h2>Vendedores</h2><span className="muted">Selecione um vendedor para ver todos os indicadores</span></div>
           <div className="scroll"><table><thead><tr><th>Vendedor</th><th>Coordenação</th><th>Supervisão</th><th>Volume</th><th>Positivação</th><th>Mix</th><th>Detalhes</th></tr></thead><tbody>{ordered.map(r => <tr key={keyOf(r)}><td><strong>{r.vendedor}</strong><small>RCA {r.codigo_vendedor}</small></td><td>{r.coordenacao}</td><td>{r.supervisao}<small>{r.codigo_supervisao}</small></td>{TYPES.map(([key]) => <td key={key}><span className="pct">{percent(rate(r.indicadores?.[key]))}</span><Progress value={rate(r.indicadores?.[key])}/></td>)}<td><button className="detail-btn" onClick={() => setSelected(keyOf(r))}>Ver</button></td></tr>)}</tbody></table>{!loading && !ordered.length && <p className="empty">Nenhum vendedor encontrado.</p>}</div></>}
           {group && <div className="detail-backdrop" onClick={() => setGroupDetail(null)}><div className="detail-panel" role="dialog" aria-modal="true" aria-label="Detalhamento do grupo" onClick={e => e.stopPropagation()}><div className="detail-header"><div><p className="eyebrow">VISÃO {group.type === 'coordenacao' ? 'DA COORDENAÇÃO' : 'DA SUPERVISÃO'}</p><h2>{group.name}</h2><p className="muted">{group.subtitle} · {group.count} vendedores</p></div><button aria-label="Fechar detalhes" onClick={() => setGroupDetail(null)}>✕</button></div><div className="detail-indicators">{TYPES.map(([key,name,kind]) => <Indicator key={key} name={name} kind={kind} item={group.indicadores[key]}/>)}</div><h3>Equipe</h3><div className="group-members">{[...group.rows].sort((a,b) => String(a.vendedor).localeCompare(String(b.vendedor),'pt-BR')).map(r => <button key={keyOf(r)} onClick={() => {setGroupDetail(null);setSelected(keyOf(r));}}><span>{r.vendedor}</span><small>RCA {r.codigo_vendedor} · {r.supervisao}</small></button>)}</div><button className="primary close-btn" onClick={() => setGroupDetail(null)}>Fechar</button></div></div>}
