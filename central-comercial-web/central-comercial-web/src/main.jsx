@@ -4,6 +4,7 @@ import { auth, login, signOut, onAuthStateChanged } from './firebase';
 import { api } from './api';
 import './style.css';
 import AdminPanel from './AdminPanel';
+import CRMPanel from './CRMPanel';
 
 const MODULES = { vendedores: 'Situação de Vendedores', crm: 'CRM de Clientes', propostas: 'Análise de Propostas', gerais: 'Relatórios Gerais' };
 const TYPES = [ ['volume', 'Volume', 'R$'], ['positivacao', 'Positivação', 'clientes'], ['mix', 'Mix', 'itens'] ];
@@ -127,7 +128,7 @@ function App() {
     if (!allowed.includes(module) && allowed.length) setModule(allowed[0]);
   }, [me, module]);
   useEffect(() => {
-    if (!me || !(me.modules || []).includes(module)) return;
+    if (!me || module !== 'vendedores' || !(me.modules || []).includes(module)) return;
     let active = true;
     setLoading(true); setError(''); setRows([]); setOfficialRows([]); setMetadata(null); setSelected(''); setGroupDetail(null);
     const query = coord ? '?coordenacao=' + encodeURIComponent(coord) : '';
@@ -199,7 +200,7 @@ function App() {
     <header className="topbar"><strong>Central Comercial</strong><div className="account"><span>{user.email}</span><button onClick={() => signOut(auth)}>Sair</button></div></header>
     <main className="page">
       <nav className="modules"><button className={adminMode?'active':''} onClick={()=>{setAdminMode(false);window.history.replaceState(null,'',window.location.pathname);}}>Painel Comercial</button>{me.administrador&&<button className={adminMode?'active':''} onClick={()=>{setAdminMode(true);window.history.replaceState(null,'',window.location.pathname+'?admin=1');}}>Administração</button>}{Object.entries(MODULES).filter(([k]) => allowed.includes(k)).map(([k,name]) => <button key={k} className={module === k ? 'active' : ''} onClick={() => { setAdminMode(false);window.history.replaceState(null,'',window.location.pathname);setModule(k);setCoord('');setSup('');setSeller('');setSearch(''); }}>{name}</button>)}</nav>
-      {adminMode ? <AdminPanel me={me}/> : <section className="panel">
+      {adminMode ? <AdminPanel me={me}/> : module === 'crm' ? <CRMPanel me={me}/> : <section className="panel">
         <div className="panel-heading"><div><p className="eyebrow">PAINEL COMERCIAL</p><h1>{MODULES[module]}</h1><p className="muted">Acompanhamento de metas e resultados por coordenação, supervisão e RCA.</p></div><span className="count-tag">{loading ? 'Carregando…' : `${visible.length} vendedores exibidos`}</span></div>
         <div className="filters">
           <label>Coordenação<select value={coord} onChange={e => {setCoord(e.target.value);setSup('');setSeller('');setSearch('');}}><option value="">Todas autorizadas</option>{coords.map(c => <option key={c.id} value={c.codigo}>{c.nome}</option>)}</select></label>
