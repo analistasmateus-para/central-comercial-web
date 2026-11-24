@@ -5,6 +5,7 @@ import { api } from './api';
 import './style.css';
 import AdminPanel from './AdminPanel';
 import CRMPanel from './CRMPanel';
+import PropostasPanel from './PropostasPanel';
 
 const MODULES = { vendedores: 'Situação de Vendedores', crm: 'CRM de Clientes', propostas: 'Análise de Propostas' };
 const TYPES = [ ['volume', 'Volume', 'R$'], ['positivacao', 'Positivação', 'clientes'], ['mix', 'Mix', 'itens'] ];
@@ -201,7 +202,7 @@ function App() {
     <header className="topbar"><strong>Central Comercial</strong><div className="account"><span>{user.email}</span><button onClick={() => signOut(auth)}>Sair</button></div></header>
     <main className="page">
       <nav className="modules">{me.administrador&&<button className={adminMode?'active':''} onClick={()=>{setAdminMode(true);window.history.replaceState(null,'',window.location.pathname+'?admin=1');}}>Administração</button>}{Object.entries(MODULES).filter(([k]) => allowed.includes(k)).map(([k,name]) => <button key={k} className={!adminMode && module === k ? 'active' : ''} onClick={() => { setAdminMode(false);window.history.replaceState(null,'',window.location.pathname);setModule(k);setCoord('');setSup('');setSeller('');setSearch(''); }}>{name}</button>)}</nav>
-      {adminMode && me.administrador ? <AdminPanel me={me}/> : !allowed.includes(module) ? <section className="panel"><h1>Nenhum módulo autorizado</h1><p>Selecione um módulo disponível ou solicite acesso ao administrador.</p></section> : module === 'propostas' ? <section className="panel"><h1>Análise de Propostas</h1><p>Módulo em desenvolvimento.</p></section> : module === 'crm' ? <CRMPanel me={me}/> : <section className="panel">
+      {adminMode && me.administrador ? <AdminPanel me={me}/> : !allowed.includes(module) ? <section className="panel"><h1>Nenhum módulo autorizado</h1><p>Selecione um módulo disponível ou solicite acesso ao administrador.</p></section> : module === 'propostas' ? <PropostasPanel/> : module === 'crm' ? <CRMPanel me={me}/> : <section className="panel">
         <div className="panel-heading"><div><p className="eyebrow">PAINEL COMERCIAL</p><h1>{MODULES[module]}</h1><p className="muted">Acompanhamento de metas e resultados por coordenação, supervisão e RCA.</p></div><span className="count-tag">{loading ? 'Carregando…' : `${visible.length} vendedores exibidos`}</span></div>
         <div className="filters">
           <label>Coordenação<select value={coord} onChange={e => {setCoord(e.target.value);setSup('');setSeller('');setSearch('');}}><option value="">Todas autorizadas</option>{coords.map(c => <option key={c.id} value={c.codigo}>{c.nome}</option>)}</select></label>
